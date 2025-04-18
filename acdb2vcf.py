@@ -1,398 +1,331 @@
-#!/usr/bin/env python2
-
-#
-# acdb2vcf.py is a python tool by alejandrolopezparra to export contacts data from Android Contacts
-# Databases (SQLite3) to vCard 3.0 text files. It's useful to recover contacts data from an Android
-# Phone (contacts2.db) into Google Contacts or other services supporting vCard file format (.vcf).
-# 
-# acdb2vcf.py v1.0 supports:
-#   - Python 2/3
-#   - Android Contacts Database format (SQLite3)
-#   - Account type filtering: Google, Exchange, WhatsApp, Telegram, Phone, SIM, ...
-#   - N, FN, ADR, BDAY, EMAIL, NOTE, ORG, ROLE, TEL properties from vCard 3.0 standard
-#
-# It's based on the original tool and instructions by Andreas Boehler at
-#  https://www.aboehler.at/doku/doku.php/blog:2012:1007_recovering_contacts_from_dead_android_phone
-#
-# It's also based on modifications by Ian Worthington at
-#  https://forum.xda-developers.com/android/help/extract-contacts-backup-t3307684
-#
-# More info about Android Contacts Database at:
-#  - Android Contacts Database Structure - https://www.dev2qa.com/android-contacts-database-structure/
-#  - Contacts Provider - https://developer.android.com/guide/topics/providers/contacts-provider
-#
-# More info about vCard 3.0 at:
-#  - vCard 3.0 format specification - https://www.evenx.com/vcard-3-0-format-specification
-#  - A MIME Content-Type for Directory Information - https://tools.ietf.org/html/rfc2425
-#  - vCard MIME Directory Profile - https://tools.ietf.org/html/rfc2426.html
-#  - Representing vCard Objects in RDF - https://www.w3.org/Submission/2010/SUBM-vcard-rdf-20100120/
-#  - vCard (Wikipedia) - https://en.wikipedia.org/wiki/VCard
-#
-# Changelog:
-#  * 1.0 (2018-11-06)
-#    - Initial release
-#
+#!/usr/bin/env python3
+import argparse
 
 import sqlite3
-import sys
-import codecs
-
-# VERSION
-version = "1.0"
-
-account_types = {}
-# ????????: 'vnd.sec.contact.agg.account_type'account_types = {}
-account_types['exchange'] = "'com.google.android.gm.exchange'"
-account_types['google']   = "'com.google'"
-account_types['imap']     = "'com.google.android.gm.legacyimap'"
-account_types['phone']    = "'vnd.sec.contact.phone'"
-account_types['sim']      = "'vnd.sec.contact.sim'"
-account_types['telegram'] = "'org.telegram.messenger'"
-account_types['tuenti']   = "'com.tuenti.messenger.auth'"
-account_types['twitter']  = "'com.twitter.android.auth.login'"
-account_types['whatsapp'] = "'com.whatsapp'"
+from types import SimpleNamespace
 
 
-# Usage information
-def usage(filename):
-    help_string = "\n"
-    help_string += filename + " v" + version + " is a python tool by alejandrolopezparra to export contacts\n"
-    help_string += "data from Android Contacts Databases (contacts2.db) to vCard 3.0 files (.vcf)\n"
-    help_string += "\n"
-    help_string += "usage: " + filename + " [options] <db_input> <vcf_output>\n"
-    help_string += "\n"
-    help_string += "Arguments:\n"
-    help_string += "  [options]\n"
-    help_string += "     --all\tAll contacts will be exported. By default\n"
-    for key in account_types:
-        help_string += "     --" + key + "\t" + key.capitalize() + " contacts will be exported\n"
-    help_string += "\n"
-    help_string += "  <db_input>\tInput Android Contact Database (SQLite3), e.g. contacts2.db\n"
-    help_string += "  <vcf_output>\tOutput Virtual Contact File (vCard) filename, e.g. MyContacts.vcf\n"
-    sys.exit(help_string)
+known_account_types = {
+    "exchange": "com.google.android.gm.exchange",
+    "google": "com.google",
+    "imap": "com.google.android.gm.legacyimap",
+    "phone": "vnd.sec.contact.phone",
+    "sim": "vnd.sec.contact.sim",
+    "telegram": "org.telegram.messenger",
+    "tuenti": "com.tuenti.messenger.auth",
+    "twitter": "com.twitter.android.auth.login",
+    "whatsapp": "com.whatsapp",
+}
 
 
 # Remove Line Breaks from strings
-def removeLB (text):
-    if text != None:
+def remove_line_breaks(text: str | None) -> str | None:
+    if text is not None:
         text = text.replace("\n"," ")
         text = text.replace("\r"," ")
     return text
 
 # Contact class stores contacts data
 class Contact:
-    def __init__(self, id):
-        self.id = id
-        self.phoneNumbers = []
-        self.mailAddresses = []
-        self.addresses = []
-        self.name = ""
-        self.lastname = ""
-        self.firstname = ""
-        self.org = ""
-        self.role = ""
-        self.note = ""
-        self.bday = ""
+    def __init__(self, id_: int):
+        self._id = id_
+        self._phone_numbers = []
+        self._mail_addresses = []
+        self._addresses = []
+        self._name = ""
+        self._lastname = ""
+        self._firstname = ""
+        self._org = ""
+        self._role = ""
+        self._note = ""
+        self._bday = ""
 
-    def AddPhone(self, number):
-        if number != None:
-            self.phoneNumbers.append(removeLB(number))
+    @property
+    def id(self) -> int:
+        return self._id
 
-    def GetPhones(self):
-        return self.phoneNumbers
+    def add_phone(self, number: str) -> None:
+        if number is not None:
+            self._phone_numbers.append(remove_line_breaks(number))
 
-    def AddMail(self, mail):
-        if mail != None:
-            self.mailAddresses.append(removeLB(mail))
+    def get_phones(self):
+        return self._phone_numbers
 
-    def GetMails(self):
-        return self.mailAddresses
+    def add_mail(self, mail: str) -> None:
+        if mail is not None:
+            self._mail_addresses.append(remove_line_breaks(mail))
 
-    def AddAddress(self, address):
-        if address != None:
-            self.addresses.append(removeLB(address))
+    def get_mails(self):
+        return self._mail_addresses
 
-    def GetAddresses(self):
-        return self.addresses
+    def add_address(self, address: str) -> None:
+        if address is not None:
+            self._addresses.append(remove_line_breaks(address))
 
-    def SetFirstname(self, firstname):
-        if firstname != None:
-            self.firstname = removeLB(firstname)
+    def get_addresses(self):
+        return self._addresses
 
-    def SetLastname(self, lastname):
-        if lastname != None:
-            self.lastname = removeLB(lastname)
+    @property
+    def first_name(self) -> str:
+        return self._firstname
 
-    def SetName(self, name):
-        if name != None:
-            self.name = removeLB(name)
+    @first_name.setter
+    def first_name(self, value: str | None) -> None:
+        if value is not None:
+            self._firstname = remove_line_breaks(value)
 
-    def GetName(self):
-        return (self.name, self.lastname, self.firstname)
+    @property
+    def last_name(self) -> str:
+        return self._lastname
 
-    def SetNote(self, note):
-        if note != None:
-            self.note = removeLB(note)
+    @last_name.setter
+    def last_name(self, value: str | None) -> None:
+        if value is not None:
+            self._lastname = remove_line_breaks(value)
 
-    def GetNote(self):
-        return (self.note)
+    @property
+    def name(self) -> str:
+        return self._name
 
-    def SetBirthday(self, bday):
-        if bday != None:
-            self.bday = removeLB(bday)
+    @name.setter
+    def name(self, value: str | None) -> None:
+        if value is not None:
+            self._name = remove_line_breaks(value)
 
-    def GetBirthday(self):
-        return (self.bday)
+    @property
+    def full_name(self):
+        return self._name, self._lastname, self._firstname
 
-    def SetOrg(self, org):
-        if org != None:
-            self.org = removeLB(org)
+    @property
+    def note(self) -> str:
+        return self._note
 
-    def GetOrg(self):
-        return (self.org)
+    @note.setter
+    def note(self, value: str | None) -> None:
+        if value is not None:
+            self._note = remove_line_breaks(value)
 
-    def SetRole(self, role):
-        if role != None:
-            self.role = removeLB(role)
+    @property
+    def birthday(self) -> str:
+        return self._bday
 
-    def GetRole(self):
-        return (self.role)
+    @birthday.setter
+    def birthday(self, value: str | None) -> None:
+        if value is not None:
+            self._bday = remove_line_breaks(value)
 
-    def GetId(self):
-        return self.id
+    @property
+    def org(self) -> str:
+        return self._org
 
-    def GetVCard(self):
-        vcard = []
-        # HEADER
-        vcard.append("BEGIN:VCARD")
-        vcard.append("VERSION:3.0")
-        # N:
-        vcard.append("N:" + self.lastname + ";" + self.firstname)
+    @org.setter
+    def org(self, value: str | None) -> None:
+        if value is not None:
+            self._org = remove_line_breaks(value)
+
+    @property
+    def role(self) -> str:
+        return self._role
+
+    @role.setter
+    def role(self, value: str | None) -> None:
+        if value is not None:
+            self._role = remove_line_breaks(value)
+
+    def to_vcard(self):
+        vcard = [
+            # HEADER
+            "BEGIN:VCARD",
+            "VERSION:3.0",
+            # N:
+            f"N:{self._lastname};{self._firstname}"
+        ]
+
         # FN:
-        fnText = "?"
+        full_name = "?"
         if self.name != "":
-            fnText = self.name
-        elif len(self.lastname) > 0 and len(self.firstname) > 0:
-            fnText = self.firstname + " " + self.lastname
-        elif len(self.lastname) > 0:
-            fnText = self.lastname
-        elif len(self.firstname) > 0:
-            fnText = self.firstname
-        vcard.append("FN:" + fnText)
+            full_name = self.name
+        elif len(self._lastname) > 0 and len(self._firstname) > 0:
+            full_name = f"{self._firstname} {self._lastname}"
+        elif len(self._lastname) > 0:
+            full_name = self._lastname
+        elif len(self._firstname) > 0:
+            full_name = self._firstname
+        vcard.append(f"FN:{full_name}")
+
         # TEL;
-        for phone in self.phoneNumbers:
-            vcard.append("TEL;" + phone)
+        for phone in self._phone_numbers:
+            vcard.append(f"TEL;{phone}")
+
         # EMAIL;
-        for mail in self.mailAddresses:
-            vcard.append("EMAIL;" + mail)
+        for mail in self._mail_addresses:
+            vcard.append(f"EMAIL;{mail}")
+
         # ADR;
-        for address in self.addresses:
-            vcard.append("ADR;" + address)
+        for address in self._addresses:
+            vcard.append(f"ADR;{address}")
+
         # ORG:
-        if self.org:
-            vcard.append("ORG:" + self.org)
+        if self._org:
+            vcard.append(f"ORG:{self._org}")
+
         # ROLE:
-        if self.role:
-            vcard.append("ROLE:" + self.role)
+        if self._role:
+            vcard.append(f"ROLE:{self._role}")
+
         # NOTE:
-        if self.note:
-            vcard.append("NOTE:" + self.note)
+        if self._note:
+            vcard.append(f"NOTE:{self._note}")
+
         # BDAY:
-        if self.bday:
-            vcard.append("BDAY:" + self.bday)
+        if self._bday:
+            vcard.append(f"BDAY:{self._bday}")
+
         vcard.append("END:VCARD")
         return vcard
 
-###########
-# MAIN code
-###########
 
-#
-# 1. Parsing arguments
-#
-
-# Executable File Name
-efn = sys.argv[0]
-
-# Checking number of arguments
-arg_n = len(sys.argv)
-#print "arg_n: " + str(arg_n)
-if arg_n < 3:
-    print " * Error message: There are less arguments than expected"
-    usage(efn)
-elif arg_n > 12:
-    print " * Error message: There are more arguments than expected"
-    usage(efn)
-
-# Input and OutPut File Names are the last 2 arguments
-ifn = sys.argv[arg_n-2]
-#print "ifn: " + ifn
-ofn = sys.argv[arg_n-1]
-#print "ofn: " + ofn
-
-# Checking options
-options = {}
-for arg in sys.argv:
-    type = arg.replace("--","",1)
-    #print "type: " + type
-    if account_types.has_key(type) or type == "all":
-    #print "options[" + type + "]: " + arg
-        options[type] = arg
-    elif arg in (efn, ifn, ofn):
-        pass
-    else:
-        print " * Error message: option '" + arg + "' is not valid"
-        usage(efn)
+class ArgsNamespace(SimpleNamespace):
+    all: bool
+    list_accounts: bool
+    accounts: list[str]
+    db_path: str
+    vcf_path: str
 
 
-#
-# 2. Extracting contacts data from database
-#
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--all", "-a", action="store_true", default=False, help="Export all accounts")
+    for account_name, account_package in known_account_types.items():
+        parser.add_argument(f"--{account_name}", action="append_const", dest="accounts", const=account_package,
+                            help=f"Export contacts associated with \"{account_name}\" account")
+    parser.add_argument("--list-accounts", action="store_true", default=False, help="Just list accounts")
+    parser.add_argument("--account", required=False, action="extend", dest="accounts", nargs="*",
+                        help="Export account that is not listed above")
+    parser.add_argument("db_path", type=str, help="Path to input contacts2.db")
+    parser.add_argument("vcf_path", type=str, nargs="?", help="Path to output vcf file")
 
-# Building account type filter based on options
-account_filter = ""
-if not options.has_key('all'):
-   #print "all is not present so filters may be applied"
-   i = 0
-   for key in options.keys():
-      #print "key: " + key
-      if account_types.has_key(key):
-          i += 1
-          account_type=account_types[key]
-          if i == 1:
-             account_filter += " WHERE account_type=" + account_type
-          else:
-             account_filter += " OR account_type=" + account_type
-#print "account_filter: " + account_filter
+    args = parser.parse_args(namespace=ArgsNamespace())
 
-# Connecting to database
-db = sqlite3.Connection(ifn)
-c = db.cursor()
+    conn = sqlite3.connect(args.db_path)
+    cur = conn.cursor()
 
-# Getting accounts for chosen account types
-c.execute("SELECT _id, account_name FROM accounts" + account_filter)
-accounts = {}
-while True:
-    account = c.fetchone()
-    if account is None: break
-    if not accounts.has_key(account[0]):
-        accounts[account[0]] = account[1]
+    if args.list_accounts or args.all:
+        if args.all and args.accounts is None:
+            args.accounts = []
 
-# Getting contacts for selected accounts
-contacts = {}
-for key in accounts.keys():
-    id_filter=" WHERE account_id=" + str(key)
+        cur.execute("SELECT account_name, account_type FROM accounts")
+        for account_name, account_type in cur:
+            if args.all:
+                args.accounts.append(account_type)
+            else:
+                print(f"{account_type} ({account_name})")
 
-    c.execute("SELECT COUNT(*) FROM raw_contacts" + id_filter)
-    num_entries = c.fetchone()[0]
-    print " * Getting " + str(num_entries) + " contacts from " + str(accounts[key]) + " (account_id = " + str(key) + ")"
+        if args.list_accounts:
+            return
 
-    c.execute("SELECT _id FROM raw_contacts" + id_filter)
-    while True:
-        row = c.fetchone()
-        if row is None: break
-        if not contacts.has_key(row[0]):
-            contacts[row[0]] = Contact(row[0])
+    if args.all:
+        if args.accounts is None:
+            args.accounts = []
+        args.accounts.extend(known_account_types.values())
 
-# Getting data for selected contacts
-for key in contacts.keys():
-    c.execute("SELECT mimetype_id, data1, data2, data3, data4, data5, data6, data7, data8, data9, data10 FROM data WHERE raw_contact_id = " + str(contacts[key].GetId()))
-    while True:
-        row = c.fetchone()
-        if row is None: break
-        mimetype = row[0] if row[0] else ""
-        data1    = row[1] if row[1] else ""
-        data2    = row[2] if row[2] else ""
-        data3    = row[3] if row[3] else ""
-        data4    = row[4] if row[4] else ""
-        data5    = row[5] if row[5] else ""
-        data6    = row[6] if row[6] else ""
-        data7    = row[7] if row[7] else ""
-        data8    = row[8] if row[8] else ""
-        data9    = row[9] if row[9] else ""
-        data10   = row[10] if row[10] else ""
-        if mimetype == 1: # Mail
-            email = data1
-            contacts[key].AddMail("type=INTERNET;type=WORK:" + data1)
-        elif mimetype == 4: # ORG and ROLE
-            org      = data1
-            org_unit = data5
-            role     = data4
-            if org or org_unit:
-                contacts[key].SetOrg(org + ";" + org_unit)
-            if role:
-                contacts[key].SetRole(role)
-        elif mimetype == 5: # Phone
-            phone_number      = data1
-            phone_number_cc   = data4
-            phone_type        = data2  
-            phone_type_string = "type=WORK:" # Work, by default
-            if phone_type == "1" and len(phone_number)>8: # Home
-                phone_type_string="type=HOME:"
-            elif phone_type == "2" and len(phone_number)>8: # Mobile
-                phone_type_string="type=CELL:"
-            contacts[key].AddPhone(phone_type_string + phone_number)
-        elif mimetype == 7: # Name
-            name       = data1
-            first_name = data2
-            last_name  = data3
-            contacts[key].SetName(name)
-            contacts[key].SetFirstname(first_name)
-            contacts[key].SetLastname(last_name)
-        elif mimetype == 8: # Address
-            address_type = data2
-            street       = data4
-            locality     = data7
-            region       = data8
-            postalCode   = data9
-            country      = data10
-            address_type_string = "type=WORK:" # Work, by default
-            if address_type == "1": # Home
-                address_type_string = "type=HOME:"
-            contacts[key].AddAddress(address_type_string + ";;" + street + ";" + locality + ";" + region + ";" + postalCode + ";" + country)
-        elif mimetype == 11: # Note
-            note = data1
-            contacts[key].SetNote(note)
-        elif mimetype == 12: # Birth day
-            bday = data1
-            contacts[key].SetBirthday(bday)
-        elif mimetype == 21: # Telegram Profile
-            phone_number      = data3
-            telegram_id       = data1
-            phone_type_string="type=CELL:"
-            contacts[key].AddPhone(phone_type_string + phone_number)
+    if not args.accounts:
+        print("No accounts specified!")
+        return
+
+    args.accounts = list(set(args.accounts))
+
+    contacts: list[Contact] = []
+
+    for account_package in args.accounts:
+        cur.execute("SELECT _id, account_name FROM accounts WHERE account_type=?", (account_package,))
+        for account_id, account_name in cur.fetchall():
+            cur.execute("SELECT COUNT(*) FROM raw_contacts WHERE account_id=?", (account_id,))
+            num_entries = cur.fetchone()[0]
+            if not num_entries:
+                continue
+
+            print(f"Exporting {num_entries} contacts from {account_name}")
+
+            cur.execute("SELECT _id FROM raw_contacts WHERE account_id=?", (account_id,))
+            for raw_contact_id in cur:
+                if raw_contact_id not in contacts:
+                    contacts.append(Contact(raw_contact_id))
+
+    mimetypes: dict[int, str] = {}
+    cur.execute("SELECT _id, mimetype FROM mimetypes")
+    for mimetype_id, mimetype_name in cur:
+        mimetypes[mimetype_id] = mimetype_name
+
+    for contact in contacts:
+        # TODO: data11-data15 (photo, etc.)
+        cur.execute(
+            "SELECT mimetype_id, data1, data2, data3, data4, data5, data6, data7, data8, data9, data10 "
+            "FROM data "
+            "WHERE raw_contact_id=?",
+            contact.id
+        )
+
+        for mimetype_id, data1, data2, data3, data4, data5, data6, data7, data8, data9, data10 in cur:
+            if mimetype_id not in mimetypes:
+                continue
+
+            mimetype = mimetypes[mimetype_id]
+            if mimetype == "vnd.android.cursor.item/email_v2":
+                # TODO: verify that email is stored in data1
+                contact.add_mail(f"type=INTERNET;type=WORK:{data1}")
+            elif mimetype == "vnd.android.cursor.item/organization":
+                # TODO: verify that org is stored in data1, data4 and data5
+                org = data1
+                role = data4
+                org_unit = data5
+                if org or org_unit:
+                    contact.org = f"{org};{org_unit}"
+                if role:
+                    contact.role = role
+            elif mimetype == "vnd.android.cursor.item/phone_v2":
+                phone_number = data1
+                phone_type = data2
+                phone_type_string = "WORK"  # Work, by default
+                if phone_type == "1" and len(phone_number) > 8:  # Home
+                    phone_type_string = "HOME"
+                elif phone_type == "2" and len(phone_number) > 8:  # Mobile
+                    phone_type_string = "CELL"
+                contact.add_phone(f"type={phone_type_string}:{phone_number}")
+            elif mimetype == "vnd.android.cursor.item/name":
+                contact.name = data1
+                contact.first_name = data2
+                contact.last_name = data3
+            elif mimetype == "vnd.android.cursor.item/postal-address_v2":
+                # TODO: verify that address is stored in data2, data4, data7, data8, data9 and data10
+                address_type = data2
+                street = data4
+                locality = data7
+                region = data8
+                postal_code = data9
+                country = data10
+                type_string = "WORK"  # Work, by default
+                if address_type == "1":  # Home
+                    type_string = "HOME"
+                contact.add_address(f"type={type_string}:;;{street};{locality};{region};{postal_code};{country}")
+            elif mimetype == "vnd.android.cursor.item/note":
+                # TODO: verify that note is stored in data1
+                contact.note = data1
+            elif mimetype == "vnd.com.miui.cursor.item/lunarBirthday":
+                # TODO: verify that note is stored in data1
+                contact.birthday = data1
+
+            # TODO: add viber/telegram number
+
+        vcard = "\n".join(contact.to_vcard())
+        if args.vcf_path is None:
+            print(vcard)
+            print()
+        else:
+            with open(args.vcf_path, "w" if contact is contacts[0] else "a") as f:
+                f.write(vcard)
+                f.write("\n")
 
 
-# Closing database connetions
-c.close()
-db.close()
-
-
-#
-# 3. Exporting contacts data to vCard file (.VCF)
-#
-
-if contacts:
-    fp = codecs.open(ofn, "w", "utf-8")
-    fp.write(u'\ufeff')
-    #print "Contact's Details: "
-    for key in contacts.keys():
-        if contacts[key].GetId() != 0:
-            #string = ""
-            #last, first = contacts[key].GetName()
-            #if len(last) > 0 and len(first) > 0:
-            #    string += last + " " + first
-            #elif len(last) > 0:
-            #    string += last
-            #elif len(first) > 0:
-            #    string += first
-            #phones = contacts[key].GetPhones()
-            #for phone in phones:
-            #    string += phone + " "
-            #mails = contacts[key].GetMails()
-            #for mail in mails:
-            #    string += mail + " "
-            #print string
-            fp.write("\n".join(contacts[key].GetVCard()))
-            fp.write("\n")
-    fp.close()
+if __name__ == "__main__":
+    main()
